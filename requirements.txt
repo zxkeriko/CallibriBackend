@@ -7,8 +7,5 @@ python-jose[cryptography]
 pydantic[email]
 pydantic-settings
 python-multipart
-<<<<<<< HEAD
 sqladmin
 itsdangerous
-=======
->>>>>>> eb81d59e999f479b87c61554960ce6bed4e09c78
