@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,8 +24,12 @@ from .auth import (
 )
 from .db import Base, engine
 from .email_service import send_verification_email
-from .models import PulseSample, PulseSession, User
+from .models import Group, GroupMember, PulseSample, PulseSession, User
 from .schemas import (
+    GroupCreate,
+    GroupMemberAdd,
+    GroupMemberOut,
+    GroupOut,
     PulseSamplesBulkCreate,
     PulseSampleOut,
     PulseSessionCreate,
@@ -93,10 +98,44 @@ def root():
 def register(data: RegisterIn, db: Session = Depends(get_db)):
     email = normalize_email(data.email)
 
-    if get_user_by_email(db, email):
-        raise HTTPException(status_code=409, detail="Email already registered")
+    existing_user = get_user_by_email(db, email)
+
+    if existing_user:
+        if existing_user.is_verified:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        code = generate_verification_code()
+
+        try:
+            send_verification_email(existing_user.email, code)
+            print("RESEND CODE:", code)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to send verification email: {str(e)}",
+            )
+
+        existing_user.full_name = data.full_name
+        existing_user.password_hash = hash_password(data.password)
+        existing_user.verification_code = code
+        existing_user.verification_expires_at = datetime.utcnow() + timedelta(minutes=10)
+
+        db.commit()
+        db.refresh(existing_user)
+
+        return existing_user
 
     code = generate_verification_code()
+
+    try:
+        send_verification_email(email, code)
+        print("RESEND CODE:", code)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to send verification email: {str(e)}",
+        )
+
     user = User(
         email=email,
         full_name=data.full_name,
@@ -109,17 +148,6 @@ def register(data: RegisterIn, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
-
-    try:
-        send_verification_email(user.email, code)
-        print("RESEND CODE:", code)
-    except Exception as e:
-        db.delete(user)
-        db.commit()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to send verification email: {str(e)}",
-        )
 
     return user
 
@@ -226,6 +254,226 @@ def update_user_params(data: UpdateUserParamsIn, db: Session = Depends(get_db)):
 @app.get("/auth/me", response_model=UserOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+# ====================== ГРУППЫ ======================
+
+
+@app.post("/groups", response_model=GroupOut, status_code=201)
+def create_group(
+    data: GroupCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = Group(
+        name=data.name,
+        owner_id=current_user.id,
+    )
+
+    db.add(group)
+    db.commit()
+    db.refresh(group)
+
+    owner_member = GroupMember(
+        group_id=group.id,
+        user_id=current_user.id,
+    )
+
+    db.add(owner_member)
+    db.commit()
+
+    return group
+
+
+@app.get("/groups", response_model=List[GroupOut])
+def list_my_groups(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    groups = (
+        db.query(Group)
+        .join(GroupMember, GroupMember.group_id == Group.id)
+        .filter(GroupMember.user_id == current_user.id)
+        .order_by(Group.created_at.desc())
+        .all()
+    )
+
+    return groups
+
+
+@app.post("/groups/{group_id}/members")
+def add_member_to_group(
+    group_id: int,
+    data: GroupMemberAdd,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = (
+        db.query(Group)
+        .filter(
+            Group.id == group_id,
+            Group.owner_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not group:
+        raise HTTPException(
+            status_code=404,
+            detail="Group not found or access denied",
+        )
+
+    email = normalize_email_basic(data.email)
+    user_to_add = get_user_by_email(db, email)
+
+    if not user_to_add:
+        raise HTTPException(
+            status_code=404,
+            detail="User with this email not found",
+        )
+
+    existing = (
+        db.query(GroupMember)
+        .filter(
+            GroupMember.group_id == group_id,
+            GroupMember.user_id == user_to_add.id,
+        )
+        .first()
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="User already in group",
+        )
+
+    member = GroupMember(
+        group_id=group_id,
+        user_id=user_to_add.id,
+    )
+
+    db.add(member)
+    db.commit()
+
+    return {"message": f"User {email} added to group"}
+
+
+@app.get("/groups/{group_id}/members", response_model=List[GroupMemberOut])
+def get_group_members(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = db.query(Group).filter(Group.id == group_id).first()
+
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    access = (
+        db.query(GroupMember)
+        .filter(
+            GroupMember.group_id == group_id,
+            GroupMember.user_id == current_user.id,
+        )
+        .first()
+    )
+
+    if group.owner_id != current_user.id and not access:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    members = (
+        db.query(GroupMember)
+        .filter(GroupMember.group_id == group_id)
+        .all()
+    )
+
+    result = []
+
+    for member in members:
+        result.append(
+            GroupMemberOut(
+                id=member.user.id,
+                full_name=member.user.full_name,
+                email=member.user.email,
+                heart_rate=75,
+                stress_level=40,
+            )
+        )
+
+    return result
+
+
+@app.delete("/groups/{group_id}", status_code=204)
+def delete_group(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = (
+        db.query(Group)
+        .filter(
+            Group.id == group_id,
+            Group.owner_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not group:
+        raise HTTPException(
+            status_code=404,
+            detail="Group not found or access denied",
+        )
+
+    db.delete(group)
+    db.commit()
+
+    return Response(status_code=204)
+
+
+@app.delete("/groups/{group_id}/members/{user_id}", status_code=204)
+def remove_member_from_group(
+    group_id: int,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = (
+        db.query(Group)
+        .filter(
+            Group.id == group_id,
+            Group.owner_id == current_user.id,
+        )
+        .first()
+    )
+
+    if not group:
+        raise HTTPException(
+            status_code=404,
+            detail="Group not found or access denied",
+        )
+
+    member = (
+        db.query(GroupMember)
+        .filter(
+            GroupMember.group_id == group_id,
+            GroupMember.user_id == user_id,
+        )
+        .first()
+    )
+
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found in group")
+
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Owner cannot remove himself from group",
+        )
+
+    db.delete(member)
+    db.commit()
+
+    return Response(status_code=204)
 
 
 def _recalculate_session_stats(session_obj: PulseSession):
@@ -364,6 +612,7 @@ def add_pulse_samples(
         raise HTTPException(status_code=400, detail="Samples list cannot be empty")
 
     created_samples = []
+
     for sample in data.samples:
         sample_obj = PulseSample(
             session_id=session_obj.id,

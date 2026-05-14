@@ -1,32 +1,42 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import requests
 
 from .auth import settings
 
 
 def send_verification_email(to_email: str, code: str):
-    subject = "Ваш код подтверждения"
-    body = f"Ваш код подтверждения: {code}\n\nКод действует 10 минут."
+    url = "https://api.brevo.com/v3/smtp/email"
 
-    msg = MIMEMultipart()
-    msg["From"] = f"{settings.SMTP_FROM_NAME} <{settings.SMTP_FROM_EMAIL}>"
-    msg["To"] = to_email
-    msg["Subject"] = subject
+    headers = {
+        "accept": "application/json",
+        "api-key": settings.SMTP_PASSWORD,
+        "content-type": "application/json",
+    }
 
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+    payload = {
+        "sender": {
+            "name": settings.SMTP_FROM_NAME,
+            "email": settings.SMTP_FROM_EMAIL,
+        },
+        "to": [
+            {
+                "email": to_email,
+            }
+        ],
+        "subject": "Ваш код подтверждения",
+        "textContent": f"Ваш код подтверждения: {code}\n\nКод действует 10 минут.",
+    }
 
-    try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=20) as server:
-            server.ehlo()
-            server.starttls()
-            server.ehlo()
-            print("SMTP_USER:", settings.SMTP_USER)
-            print("SMTP_HOST:", settings.SMTP_HOST)
-            print("SMTP_PORT:", settings.SMTP_PORT)
-            print("SMTP_PASSWORD length:", len(settings.SMTP_PASSWORD))
-            server.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            server.send_message(msg)
-    except Exception as e:
-        print("EMAIL ERROR:", repr(e))
-        raise Exception(f"Failed to send email: {str(e)}")
+    response = requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        timeout=30,
+    )
+
+    print("BREVO STATUS:", response.status_code)
+    print("BREVO RESPONSE:", response.text)
+
+    if response.status_code >= 400:
+        raise Exception(
+            f"Brevo API error {response.status_code}: {response.text}"
+        )

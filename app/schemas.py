@@ -101,3 +101,32 @@ class PulseSessionOut(BaseModel):
 
 class PulseSessionDetailOut(PulseSessionOut):
     samples: List[PulseSampleOut] = []
+
+
+class GroupCreate(BaseModel):
+    name: str
+
+
+class GroupOut(BaseModel):
+    id: int
+    name: str
+    owner_id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class GroupMemberAdd(BaseModel):
+    email: EmailStr
+
+
+class GroupMemberOut(BaseModel):
+    id: int
+    full_name: str
+    email: EmailStr
+    heart_rate: Optional[int] = None
+    stress_level: Optional[int] = None
+
+    class Config:
+        from_attributes = True

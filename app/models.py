@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -35,6 +36,18 @@ class User(Base):
 
     pulse_sessions = relationship(
         "PulseSession",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    owned_groups = relationship(
+        "Group",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
+
+    group_memberships = relationship(
+        "GroupMember",
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -84,3 +97,36 @@ class PulseSample(Base):
     signal_quality = Column(Integer, nullable=True)
 
     session = relationship("PulseSession", back_populates="samples")
+
+
+class Group(Base):
+    __tablename__ = "groups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    owner = relationship("User", back_populates="owned_groups")
+
+    members = relationship(
+        "GroupMember",
+        back_populates="group",
+        cascade="all, delete-orphan",
+    )
+
+
+class GroupMember(Base):
+    __tablename__ = "group_members"
+
+    __table_args__ = (
+        UniqueConstraint("group_id", "user_id", name="uq_group_user"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    added_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    group = relationship("Group", back_populates="members")
+    user = relationship("User", back_populates="group_memberships")
