@@ -24,12 +24,14 @@ from .auth import (
 )
 from .db import Base, engine
 from .email_service import send_verification_email
-from .models import Group, GroupMember, PulseSample, PulseSession, User
+from .models import Group, GroupMember, LivePulse, PulseSample, PulseSession, User
 from .schemas import (
     GroupCreate,
     GroupMemberAdd,
     GroupMemberOut,
     GroupOut,
+    LivePulseOut,
+    LivePulseUpdate,
     PulseSamplesBulkCreate,
     PulseSampleOut,
     PulseSessionCreate,
@@ -474,6 +476,76 @@ def remove_member_from_group(
     db.commit()
 
     return Response(status_code=204)
+
+
+# ====================== LIVE PULSE ======================
+
+
+@app.post("/pulse/live")
+def update_live_pulse(
+    data: LivePulseUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Находим группу, в которой состоит пользователь (берём первую)
+    membership = db.query(GroupMember).filter(GroupMember.user_id == current_user.id).first()
+
+    live = db.query(LivePulse).filter(LivePulse.user_id == current_user.id).first()
+
+    if not live:
+        live = LivePulse(
+            user_id=current_user.id,
+            group_id=membership.group_id if membership else None,
+            bpm=data.bpm,
+            stress_level=data.stress_level,
+        )
+        db.add(live)
+    else:
+        live.bpm = data.bpm
+        live.stress_level = data.stress_level
+        live.group_id = membership.group_id if membership else live.group_id
+
+    db.commit()
+    db.refresh(live)
+    return {"message": "Live data updated"}
+
+
+@app.get("/groups/{group_id}/live", response_model=List[LivePulseOut])
+def get_group_live_pulses(
+    group_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Проверяем доступ
+    group = db.query(Group).filter(Group.id == group_id).first()
+    if not group:
+        raise HTTPException(status_code=404, detail="Group not found")
+
+    is_member = db.query(GroupMember).filter(
+        GroupMember.group_id == group_id,
+        GroupMember.user_id == current_user.id,
+    ).first()
+
+    if not is_member and group.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    lives = (
+        db.query(LivePulse)
+        .join(User, LivePulse.user_id == User.id)
+        .filter(LivePulse.group_id == group_id)
+        .all()
+    )
+
+    result = []
+    for live in lives:
+        result.append(LivePulseOut(
+            user_id=live.user_id,
+            full_name=live.user.full_name,
+            bpm=live.bpm,
+            stress_level=live.stress_level,
+            last_updated=live.last_updated,
+        ))
+    return result
 
 
 def _recalculate_session_stats(session_obj: PulseSession):

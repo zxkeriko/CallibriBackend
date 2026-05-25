@@ -130,3 +130,18 @@ class GroupMember(Base):
 
     group = relationship("Group", back_populates="members")
     user = relationship("User", back_populates="group_memberships")
+
+
+class LivePulse(Base):
+    __tablename__ = "live_pulses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    group_id = Column(Integer, ForeignKey("groups.id"), nullable=True, index=True)
+
+    bpm = Column(Integer, nullable=True)
+    stress_level = Column(Integer, nullable=True)
+    last_updated = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User")
+    group = relationship("Group")

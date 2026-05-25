@@ -130,3 +130,19 @@ class GroupMemberOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LivePulseUpdate(BaseModel):
+    bpm: int
+    stress_level: int
+
+
+class LivePulseOut(BaseModel):
+    user_id: int
+    full_name: str
+    bpm: Optional[int] = None
+    stress_level: Optional[int] = None
+    last_updated: datetime
+
+    class Config:
+        from_attributes = True
