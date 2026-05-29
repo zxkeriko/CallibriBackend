@@ -812,22 +812,59 @@ def update_fcm_token(
 
 
 def send_high_pulse_notification(user_id: int, bpm: int, stress: int, db: Session):
-    token_record = db.query(FCMToken).filter(FCMToken.user_id == user_id).first()
-    if not token_record or not token_record.fcm_token:
+    # 1. Находим пользователя, у которого высокий пульс
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
         return
-    try:
-        message = messaging.Message(
-            notification=messaging.Notification(
-                title="⚠️ Внимание!",
-                body=f"Пульс: {bpm} уд/мин | Стресс: {stress}%",
-            ),
-            token=token_record.fcm_token,
-            android=messaging.AndroidConfig(priority="high"),
-        )
-        messaging.send(message)
-        print(f"Push sent to user {user_id}")
-    except Exception as e:
-        print(f"Failed to send notification: {e}")
+
+    user_token = db.query(FCMToken).filter(FCMToken.user_id == user_id).first()
+
+    # 2. Находим группу и админа
+    membership = db.query(GroupMember).filter(GroupMember.user_id == user_id).first()
+    admin_message = None
+    admin_token = None
+
+    if membership:
+        group = db.query(Group).filter(Group.id == membership.group_id).first()
+        if group:
+            admin = db.query(User).filter(User.id == group.owner_id).first()
+            if admin and admin.id != user_id:
+                admin_token_record = db.query(FCMToken).filter(FCMToken.user_id == admin.id).first()
+                if admin_token_record:
+                    admin_token = admin_token_record.fcm_token
+                    admin_message = f"Внимание, у пользователя {user.full_name} высокий пульс! — {bpm} уд/мин"
+
+    # 3. Отправляем пользователю
+    if user_token and user_token.fcm_token:
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title="⚠️ Внимание!",
+                    body=f"Пульс: {bpm} уд/мин | Стресс: {stress}%",
+                ),
+                token=user_token.fcm_token,
+                android=messaging.AndroidConfig(priority="high"),
+            )
+            messaging.send(message)
+            print(f"Push sent to user {user_id}")
+        except Exception as e:
+            print(f"Failed to send notification to user: {e}")
+
+    # 4. Отправляем админу (если есть)
+    if admin_token and admin_message:
+        try:
+            message = messaging.Message(
+                notification=messaging.Notification(
+                    title="⚠️ Высокий пульс в группе!",
+                    body=admin_message,
+                ),
+                token=admin_token,
+                android=messaging.AndroidConfig(priority="high"),
+            )
+            messaging.send(message)
+            print(f"Push sent to ADMIN {group.owner_id} about user {user.full_name}")
+        except Exception as e:
+            print(f"Failed to send notification to admin: {e}")
 
 
 @app.post("/user/notification-limits")
