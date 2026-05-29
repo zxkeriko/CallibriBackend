@@ -208,3 +208,5 @@ __marimo__/
 
 .env
 test.txt
+
+*firebase-adminsdk*.json

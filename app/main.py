@@ -9,6 +9,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
 
+import firebase_admin
+from firebase_admin import credentials, messaging
+
 from .admin import setup_admin
 from .auth import (
     create_access_token,
@@ -24,8 +27,10 @@ from .auth import (
 )
 from .db import Base, engine
 from .email_service import send_verification_email
-from .models import Group, GroupMember, LivePulse, PulseSample, PulseSession, User
+from .models import FCMToken, Group, GroupMember, LivePulse, PulseSample, PulseSession, User
 from .schemas import (
+    FcmTokenUpdate,
+    UpdateNotificationLimitsIn,
     GroupCreate,
     GroupMemberAdd,
     GroupMemberOut,
@@ -45,6 +50,11 @@ from .schemas import (
     UserOut,
     VerifyEmailIn,
 )
+
+# Инициализация Firebase (один раз при старте)
+if not firebase_admin._apps:
+    cred = credentials.Certificate("callibriteam-firebase-adminsdk-fbsvc-47cbdfc19d.json")
+    firebase_admin.initialize_app(cred)
 
 Base.metadata.create_all(bind=engine)
 
@@ -397,8 +407,8 @@ def get_group_members(
                 id=member.user.id,
                 full_name=member.user.full_name,
                 email=member.user.email,
-                heart_rate=75,
-                stress_level=40,
+                heart_rate=0,
+                stress_level=0,
             )
         )
 
@@ -507,6 +517,16 @@ def update_live_pulse(
 
     db.commit()
     db.refresh(live)
+
+    # Проверка на превышение лимитов и отправка уведомления
+    if data.bpm > current_user.hr_threshold or data.stress_level > current_user.stress_threshold:
+        send_high_pulse_notification(
+            user_id=current_user.id,
+            bpm=data.bpm,
+            stress=data.stress_level,
+            db=db,
+        )
+
     return {"message": "Live data updated"}
 
 
@@ -771,6 +791,56 @@ def debug_set(request: Request):
 @app.get("/debug/get")
 def debug_get(request: Request):
     return {"session": dict(request.session)}
+
+
+# ====================== FCM TOKENS ======================
+
+@app.post("/user/fcm-token")
+def update_fcm_token(
+    data: FcmTokenUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    db.query(FCMToken).filter(FCMToken.user_id == current_user.id).delete()
+    token = FCMToken(
+        user_id=current_user.id,
+        fcm_token=data.fcm_token,
+    )
+    db.add(token)
+    db.commit()
+    return {"message": "FCM token updated"}
+
+
+def send_high_pulse_notification(user_id: int, bpm: int, stress: int, db: Session):
+    token_record = db.query(FCMToken).filter(FCMToken.user_id == user_id).first()
+    if not token_record or not token_record.fcm_token:
+        return
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title="⚠️ Внимание!",
+                body=f"Пульс: {bpm} уд/мин | Стресс: {stress}%",
+            ),
+            token=token_record.fcm_token,
+            android=messaging.AndroidConfig(priority="high"),
+        )
+        messaging.send(message)
+        print(f"Push sent to user {user_id}")
+    except Exception as e:
+        print(f"Failed to send notification: {e}")
+
+
+@app.post("/user/notification-limits")
+def update_notification_limits(
+    data: UpdateNotificationLimitsIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_user.hr_threshold = data.hr_threshold
+    current_user.stress_threshold = data.stress_threshold
+    db.commit()
+    db.refresh(current_user)
+    return {"message": "Notification limits updated"}
 
 
 setup_admin(app)

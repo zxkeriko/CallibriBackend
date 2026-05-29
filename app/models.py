@@ -29,6 +29,9 @@ class User(Base):
     height_cm = Column(Integer, nullable=True)
     weight_kg = Column(Integer, nullable=True)
 
+    hr_threshold = Column(Integer, default=120, nullable=False)
+    stress_threshold = Column(Integer, default=70, nullable=False)
+
     is_verified = Column(Boolean, default=False, nullable=False)
     verification_code = Column(String, nullable=True)
     verification_expires_at = Column(DateTime, nullable=True)
@@ -130,6 +133,16 @@ class GroupMember(Base):
 
     group = relationship("Group", back_populates="members")
     user = relationship("User", back_populates="group_memberships")
+
+
+class FCMToken(Base):
+    __tablename__ = "fcm_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    fcm_token = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    user = relationship("User", backref="fcm_token")
 
 
 class LivePulse(Base):

@@ -132,6 +132,15 @@ class GroupMemberOut(BaseModel):
         from_attributes = True
 
 
+class FcmTokenUpdate(BaseModel):
+    fcm_token: str
+
+
+class UpdateNotificationLimitsIn(BaseModel):
+    hr_threshold: int = Field(..., ge=60, le=200)
+    stress_threshold: int = Field(..., ge=30, le=100)
+
+
 class LivePulseUpdate(BaseModel):
     bpm: int
     stress_level: int

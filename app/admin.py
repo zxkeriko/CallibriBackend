@@ -7,7 +7,7 @@ from starlette.requests import Request
 from itsdangerous import URLSafeSerializer
 
 from .db import engine
-from .models import User
+from .models import Group, GroupMember, User
 
 
 def _serializer() -> URLSafeSerializer:
@@ -69,7 +69,36 @@ class UserAdmin(ModelView, model=User):
     column_searchable_list = [User.email, User.full_name]
 
 
+class GroupAdmin(ModelView, model=Group):
+    name = "Group"
+    name_plural = "Groups"
+
+    column_list = [
+        Group.id,
+        Group.name,
+        Group.owner_id,
+        Group.created_at,
+    ]
+    column_searchable_list = [Group.name]
+
+
+class GroupMemberAdmin(ModelView, model=GroupMember):
+    name = "Group Member"
+    name_plural = "Group Members"
+
+    column_list = [
+        GroupMember.id,
+        GroupMember.group_id,
+        GroupMember.user_id,
+        GroupMember.added_at,
+    ]
+
+    column_formatters = {}
+
+
 def setup_admin(app):
     auth_backend = AdminAuth(secret_key=os.getenv("ADMIN_SECRET", "CHANGE_ME_ADMIN_SECRET"))
     admin = Admin(app, engine, authentication_backend=auth_backend)
     admin.add_view(UserAdmin)
+    admin.add_view(GroupAdmin)
+    admin.add_view(GroupMemberAdmin)
